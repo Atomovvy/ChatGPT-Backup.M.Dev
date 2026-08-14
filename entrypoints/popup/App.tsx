@@ -60,7 +60,7 @@ type LogEntry = {
   status: ProgressStatus;
 };
 
-const popupLogEntriesStorageKey = 'popupLogEntries';
+const legacyPopupLogEntriesStorageKey = 'popupLogEntries';
 const maxPopupLogEntries = 500;
 
 type StorageSettings = Partial<Settings>;
@@ -248,44 +248,8 @@ function isTerminalStatus(status: ProgressStatus) {
   return status === 'done' || status === 'cancelled' || status === 'error';
 }
 
-function isProgressStatus(value: unknown): value is ProgressStatus {
-  return value === 'idle'
-    || value === 'running'
-    || value === 'warning'
-    || value === 'done'
-    || value === 'cancelled'
-    || value === 'error';
-}
-
-function isLogEntry(value: unknown): value is LogEntry {
-  if (!value || typeof value !== 'object') return false;
-  const entry = value as Partial<LogEntry>;
-  return typeof entry.label === 'string'
-    && typeof entry.time === 'string'
-    && isProgressStatus(entry.status);
-}
-
-function dedupeLogEntries(entries: LogEntry[]) {
-  const seen = new Set<string>();
-  return entries.filter((entry) => {
-    const key = `${entry.status}:${entry.label}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-function getStoredLogEntries(value: unknown): LogEntry[] {
-  return Array.isArray(value) ? dedupeLogEntries(value.filter(isLogEntry)).slice(-maxPopupLogEntries) : [];
-}
-
-function appendLogEntriesWithoutDuplicates(entries: LogEntry[], entriesToAppend: LogEntry[]) {
-  return dedupeLogEntries([...entries, ...entriesToAppend]).slice(-maxPopupLogEntries);
-}
-
 export default function App() {
   const logScrollAreaRef                    = useRef<HTMLDivElement | null>(null);
-  const logEntriesLoadedRef                 = useRef(false);
   const [progressDone,   setProgressDone]   = useState(0);
   const [progressTarget, setProgressTarget] = useState(0);
   const [progressStatus, setProgressStatus] = useState<ProgressStatus>('idle');
@@ -310,18 +274,9 @@ export default function App() {
   const projectRunning = runningMode === 'project';
 
   useEffect(() => {
-    chrome.storage.local.get(['colorScheme', popupLogEntriesStorageKey], (result: { colorScheme?: string; popupLogEntries?: unknown }) => {
-      const storedLogEntries = getStoredLogEntries(result[popupLogEntriesStorageKey]);
-      setLogEntries((currentEntries) => {
-        const entries = appendLogEntriesWithoutDuplicates(storedLogEntries, currentEntries);
-        logEntriesLoadedRef.current = true;
-        chrome.storage.local.set({ [popupLogEntriesStorageKey]: entries });
-        return entries;
-      });
-
-      document.documentElement.classList.remove('light', 'dark');
-      document.documentElement.classList.add('light');
-    });
+    chrome.storage.local.remove(legacyPopupLogEntriesStorageKey);
+    document.documentElement.classList.remove('light', 'dark');
+    document.documentElement.classList.add('light');
 
     getActiveTabs().then((tabs) => {
       const activeTabUrl = tabs?.[0]?.url || '';
@@ -362,20 +317,12 @@ export default function App() {
     });
   }, [logEntries]);
 
-  function persistLogEntries(entries: LogEntry[]) {
-    if (logEntriesLoadedRef.current) {
-      chrome.storage.local.set({ [popupLogEntriesStorageKey]: entries });
-    }
-  }
-
   function addLogEntry(label: string, status: ProgressStatus = 'running') {
     setLogEntries((entries) => {
       const last = entries[entries.length - 1];
       if (last?.label === label && last.status === status) return entries;
 
-      const updatedEntries = [...entries, { label, status, time: formatLogTime() }].slice(-maxPopupLogEntries);
-      persistLogEntries(updatedEntries);
-      return updatedEntries;
+      return [...entries, { label, status, time: formatLogTime() }].slice(-maxPopupLogEntries);
     });
   }
 
@@ -396,9 +343,7 @@ export default function App() {
 
   function startProgressAction(text: string, status: ProgressStatus = 'running', completed?: number, targetTotal?: number) {
     const label = setProgressDetails(text, status, completed, targetTotal);
-    const latestActionEntries = [{ label, status, time: formatLogTime() }];
-    setLogEntries(latestActionEntries);
-    persistLogEntries(latestActionEntries);
+    setLogEntries([{ label, status, time: formatLogTime() }]);
   }
 
   function resetRunningStates() {
